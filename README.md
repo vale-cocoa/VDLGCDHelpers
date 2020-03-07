@@ -1,3 +1,3 @@
 # VDLGCDHelpers
 
-Helpers to for some Grand Central Dispatch operations.
+Helpers for some Grand Central Dispatch operations.
