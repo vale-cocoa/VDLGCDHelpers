@@ -1,3 +1,3 @@
-# VDLCGDHelpers
+# VDLGCDHelpers
 
-A description of this package.
+Helpers to for some Grand Central Dispatch operations.

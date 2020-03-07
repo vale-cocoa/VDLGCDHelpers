@@ -1,7 +1,8 @@
 import XCTest
 
-import VDLCGDHelpersTests
+import DispatchResultCompletionTests
 
 var tests = [XCTestCaseEntry]()
-tests += VDLCGDHelpersTests.allTests()
+tests += DispatchResultCompletionTests.allTests()
+tests += ConcurrentResultsGeneratorTests.allTests()
 XCTMain(tests)
