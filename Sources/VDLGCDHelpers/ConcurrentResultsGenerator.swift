@@ -73,18 +73,19 @@ public func concurrentResultsGenerator<T, U, V>(
     // The final result var.
     var result: Result<[T], Swift.Error>!
     
-    // Check wheter the work has to get done or not:
-    guard
-        countOfIterations > 0
-        else
-    {
-        // No iterations have to be performed, hence result is an empty
-        // array.
-        result = .success([])
-        dispatchResultCompletion(result: result, queue: queue, completion: completion)
-        return
-    }
     DispatchQueue.global(qos: .userInitiated).async {
+        // Check wheter the work has to get done or not:
+        guard
+            countOfIterations > 0
+            else
+        {
+            // No iterations have to be performed, hence result is an empty
+            // array.
+            result = .success([])
+            dispatchResultCompletion(result: result, queue: queue, completion: completion)
+            return
+        }
+        
         // Setup some stuff before diving into the concurrent perform:
         // The results for each iteration: at every index of this array
         // we store the result of the corresponding iteration, hence
