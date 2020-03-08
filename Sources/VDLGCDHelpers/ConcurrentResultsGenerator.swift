@@ -84,129 +84,129 @@ public func concurrentResultsGenerator<T, U, V>(
         dispatchResultCompletion(result: result, queue: queue, completion: completion)
         return
     }
-    
-    // Setup some stuff before diving into the concurrent perform:
-    // The results for each iteration: at every index of this array
-    // we store the result of the corresponding iteration, hence
-    // it has to be initilaized with the same count of the iterations
-    // to perform with nil values
-    var results = [Result<T, Swift.Error>?](repeating: nil, count: countOfIterations)
-    // let's have a flag which also signlas if the whole operation
-    // must be aborted
-    var operationFailed = false
-    // A reader-writer queue for writing and reading the shared
-    // resources
-    let readerWriter = DispatchQueue(label: "com.vdl.concurrent-calculator", attributes: .concurrent)
-    // the dispatch group for the iterations
-    let operationGroup = DispatchGroup()
-    
-    let _ = DispatchQueue.global(qos: .userInitiated)
-    DispatchQueue.concurrentPerform(iterations: countOfIterations)
-    { index in
-        // An iteration began, hence we enter the group
-        operationGroup.enter()
-        // flag wheter this iteration should continue or not
-        var iterationFailed = false
-        if shouldNotCalculateMoreOnFirstError {
-            // In case we ought stop when one operation failed,
-            // then we ought check the shared flag:
-            readerWriter.sync {
-                iterationFailed = operationFailed
+    DispatchQueue.global(qos: .userInitiated).async {
+        // Setup some stuff before diving into the concurrent perform:
+        // The results for each iteration: at every index of this array
+        // we store the result of the corresponding iteration, hence
+        // it has to be initilaized with the same count of the iterations
+        // to perform with nil values
+        var results = [Result<T, Swift.Error>?](repeating: nil, count: countOfIterations)
+        // let's have a flag which also signlas if the whole operation
+        // must be aborted
+        var operationFailed = false
+        // A reader-writer queue for writing and reading the shared
+        // resources
+        let readerWriter = DispatchQueue(label: "com.vdl.concurrent-calculator", attributes: .concurrent)
+        // the dispatch group for the iterations
+        let operationGroup = DispatchGroup()
+        
+        DispatchQueue.concurrentPerform(iterations: countOfIterations)
+        { index in
+            // An iteration began, hence we enter the group
+            operationGroup.enter()
+            // flag wheter this iteration should continue or not
+            var iterationFailed = false
+            if shouldNotCalculateMoreOnFirstError {
+                // In case we ought stop when one operation failed,
+                // then we ought check the shared flag:
+                readerWriter.sync {
+                    iterationFailed = operationFailed
+                }
+            }
+            
+            guard
+                !iterationFailed
+                else {
+                    // In case the whole operation has to be aborted,
+                    // we signal the dispatch group and return
+                    operationGroup.leave()
+                    return
+            }
+            
+            // Let's calculate this iteration result
+            var iterationResult: Result<T, Swift.Error>!
+            do {
+                let iterationSeed = try iterationSeeder(startingSeed, index)
+                let iterationValue = try iterationGenerator(iterationSeed)
+                iterationResult = .success(iterationValue)
+            } catch {
+                iterationResult = .failure(error)
+                iterationFailed = true
+            }
+            // We can now store it in the shared resources:
+            readerWriter.async(flags: .barrier) {
+                if (shouldNotCalculateMoreOnFirstError && iterationFailed && operationFailed == false),
+                    case .failure(let iterationError) = iterationResult
+                {
+                    // we've got an error while calculating the iteration
+                    // result, and we're told to stop as we get one, hence
+                    // we set the oepration flag, set the final result.
+                    operationFailed = true
+                    result = .failure(ConcurrentResultsGeneratorError.iterationsFailures([(index, iterationError)]))
+                } else {
+                    // Otherwise store the iteration result in the shared
+                    // container
+                    results[index] = iterationResult
+                }
+                // done, we can signal the dispatch group to leave.
+                operationGroup.leave()
             }
         }
         
+        // let's wait for all operations to perform
+        operationGroup.wait()
+        
+        // let's get rid of the optionality for the iteration results:
+        let allResults = results.compactMap { $0 }
         guard
-            !iterationFailed
+            allResults.count == results.count
             else {
-                // In case the whole operation has to be aborted,
-                // we signal the dispatch group and return
-                operationGroup.leave()
+                // We didn't get the same number of non-nil results as the
+                // iteration numbers.
+                // This could have happened because we've stopped writing
+                // iteration results because of an error during a
+                // calculation and we had to stop on first error…
+                //
+                if !shouldNotCalculateMoreOnFirstError {
+                    // …or in case something went awry with the concurrent
+                    // perform mechanism, hence we set that kind of error
+                    // as final result.
+                    // This code branch should never execute.
+                    result = .failure(ConcurrentResultsGeneratorError.someIterationsNotPerformed)
+                }
+                
+                // We can deliver the final result via given completion
+                dispatchResultCompletion(result: result, queue: queue, completion: completion)
                 return
         }
         
-        // Let's calculate this iteration result
-        var iterationResult: Result<T, Swift.Error>!
-        do {
-            let iterationSeed = try iterationSeeder(startingSeed, index)
-            let iterationValue = try iterationGenerator(iterationSeed)
-            iterationResult = .success(iterationValue)
-        } catch {
-            iterationResult = .failure(error)
-            iterationFailed = true
-        }
-        // We can now store it in the shared resources:
-        readerWriter.async(flags: .barrier) {
-            if (shouldNotCalculateMoreOnFirstError && iterationFailed && operationFailed == false),
-                case .failure(let iterationError) = iterationResult
-            {
-                // we've got an error while calculating the iteration
-                // result, and we're told to stop as we get one, hence
-                // we set the oepration flag, set the final result.
-                operationFailed = true
-                result = .failure(ConcurrentResultsGeneratorError.iterationsFailures([(index, iterationError)]))
-            } else {
-                // Otherwise store the iteration result in the shared
-                // container
-                results[index] = iterationResult
-            }
-            // done, we can signal the dispatch group to leave.
-            operationGroup.leave()
-        }
-    }
-    
-    // let's wait for all operations to perform
-    operationGroup.wait()
-    
-    // let's get rid of the optionality for the iteration results:
-    let allResults = results.compactMap { $0 }
-    guard
-        allResults.count == results.count
-        else {
-            // We didn't get the same number of non-nil results as the
-            // iteration numbers.
-            // This could have happened because we've stopped writing
-            // iteration results because of an error during a
-            // calculation and we had to stop on first error…
-            //
-            if !shouldNotCalculateMoreOnFirstError {
-                // …or in case something went awry with the concurrent
-                // perform mechanism, hence we set that kind of error
-                // as final result.
-                // This code branch should never execute.
-                result = .failure(ConcurrentResultsGeneratorError.someIterationsNotPerformed)
-            }
-            
-            // We can deliver the final result via given completion
-            dispatchResultCompletion(result: result, queue: queue, completion: completion)
-            return
-    }
-    
-    // Let's get all values from the results:
-    let allValues: [T] = allResults.compactMap { iterationResult in
-        guard
-            case .success(let value) = iterationResult
-            else { return nil }
-        return value
-    }
-    if allValues.count == allResults.count {
-        // We've got all values for each iteration, the final result is
-        // succesful though
-        result = .success(allValues)
-    } else {
-        // We've gotten some iteration result as a failure result, let's
-        // prepare the error for the final result…
-        var idx = 0
-        let allErrors: [(Int, Swift.Error)] = allResults.compactMap { iterationResult in
-            defer { idx += 1 }
+        // Let's get all values from the results:
+        let allValues: [T] = allResults.compactMap { iterationResult in
             guard
-                case .failure(let error) = iterationResult
+                case .success(let value) = iterationResult
                 else { return nil }
-            return (idx, error)
+            return value
         }
-        // …and set it as the final result:
-        result = .failure(ConcurrentResultsGeneratorError.iterationsFailures(allErrors))
+        if allValues.count == allResults.count {
+            // We've got all values for each iteration, the final result is
+            // succesful though
+            result = .success(allValues)
+        } else {
+            // We've gotten some iteration result as a failure result, let's
+            // prepare the error for the final result…
+            var idx = 0
+            let allErrors: [(Int, Swift.Error)] = allResults.compactMap { iterationResult in
+                defer { idx += 1 }
+                guard
+                    case .failure(let error) = iterationResult
+                    else { return nil }
+                return (idx, error)
+            }
+            // …and set it as the final result:
+            result = .failure(ConcurrentResultsGeneratorError.iterationsFailures(allErrors))
+        }
+        
+        // …Let's deliver the final result via given completion
+        dispatchResultCompletion(result: result, queue: queue, completion: completion)
     }
-    
-    // …Let's deliver the final result via given completion
-    dispatchResultCompletion(result: result, queue: queue, completion: completion)
 }
